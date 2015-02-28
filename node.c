@@ -578,8 +578,56 @@ void incrementClock(){
 	}
 }
 
+int sendFailed(void){
+	int rn;
+	rn = random() % 100;
+	if( rn > sendFailureProbability){
+		return 1;
+	}
+	return 0;
+}
+	
+in_port_t get_in_port(struct sockaddr *sa)
+{
+    if (sa->sa_family == AF_INET) {
+        return (((struct sockaddr_in*)sa)->sin_port);
+    }
+
+    return (((struct sockaddr_in6*)sa)->sin6_port);
+}
+
 /********************************************************************/
 /*			/HELPERS		     		    */
+/********************************************************************/
+
+
+/********************************************************************/
+/*			Send Recive Wrappers 			    */
+/********************************************************************/
+ssize_t recvMessage(int s, void* buf,size_t len, int flags, struct sockaddr *from, socklen_t *fromlen){
+	int ret;
+	struct msg * netMsg = (struct msg *)malloc(sizeof (struct msg));
+	ret = recvfrom(s, netMsg, len, flags, from, fromlen);
+	ntohMsg(netMsg,(struct msg *)buf);
+	logReceive(myClock,(struct msg *)buf,(unsigned int)get_in_port(from));
+	free(netMsg);
+	return ret;
+}
+
+size_t sendMessage(int s, void* buf, size_t len, int flags, struct sockaddr *to, socklen_t tolen){
+	incrementClock();
+	logSend(myClock,(struct msg *)buf,(unsigned int)get_in_port(to));
+	if(sendFailed()){
+		return len;
+	} else {	
+		struct msg networkMsg;
+		htonMsg((struct msg *)buf, &networkMsg);
+		return sendto(s, (void *)&networkMsg, len, flags, to, tolen);
+	}
+}
+
+/********************************************************************/
+/*			/Send Recive Wrappers 			    */
 /********************************************************************/
 
 
@@ -626,6 +674,8 @@ int mainLoop(int fd){
 }
 
 
+
+
 int main(int argc, char ** argv) {
 
 	int err = init(argc, argv);
@@ -665,7 +715,7 @@ int main(int argc, char ** argv) {
 	}
 
 	//logging tests
-	myClock[0].time++;
+	incrementClock();
 	mergeClock((struct clock *)message.vectorClock);
 	logReceive((struct clock *)myClock,&message, 8889);
 
