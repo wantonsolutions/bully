@@ -1,0 +1,68 @@
+digraph state {
+splines=true;
+/* 6 graph transitions, ELECT, ANSWER, COORD, AYA, IAA and timeout */
+
+/* States */
+Init [label=Init]; // Initialized. Waiting for Elect or Coord.
+
+//subgraph cluster_normal{
+Idle [label=Idle]; // Doing nothing. Normal nodes only.
+Coordinator [label=Coordinator]; // Currently the coordinator.
+AYA [label=AYA]; // Waiting for an IAA.
+
+//style=dotted;
+//}
+
+//subgraph cluster_election {
+Election [label="Candidate"]; // Holding an election and is the leader. Sends ELECTs when transitioning to this.
+Answered [label=Answered]; // Answered and awaiting COORD.
+
+//style=dotted;
+//}
+
+
+/* Graph and transitions. */
+
+/* No message. Random/timed. */
+Idle -> AYA [label="AYAtime"];
+
+/* ELECT */
+edge[label=ELECT];
+Init -> Election // Asked to be ELECTed.
+Idle -> Election // Asked to be ELECTed.
+Coordinator -> Election // Some low ranks decided to hold an election.
+AYA -> Election // Interrupted by election. Kill the timer.
+Answered -> Answered [style=dotted]; // Ignore attempt to elect? Election leader should answer.
+Election -> Election // Current election leader is asked for ELECT. Reply with answer.
+
+/* ANSWER */
+Election -> Answered [label=ANSWER]; // Change election leader.
+Answered -> Answered [label=ANSWER style=dotted]; // Update timeout if new leader is better.
+
+/* COORD */
+edge[label=COORD];
+Init -> Idle // Notified on initialization.
+Idle -> Idle // An election changed the leader.
+AYA -> Idle // Waiting for IAA when leader changed.
+Answered -> Idle // Got the COORD we were waiting for.
+Coordinator -> Idle // Leader usurped by new leader.
+Election -> Idle // Leader was decided while holding election. ANSWERs or ELECTs were lost.
+
+/* AYA */
+Coordinator -> Coordinator [label=AYA]; // Reply IAA. Only the leader deals with AYA. Other nodes ignore.
+// Should a coordinator in an election answer this?
+
+/* IAA */
+AYA -> Idle [label=IAA]; // Got a response.
+
+/* timeout */
+edge[label=timeout];
+Init -> Election // No message, so try for an election.
+AYA -> Election /*[label="timeout and \n send ELECTs"];*/ // No IAA, so hold an election.
+Election -> Coordinator /*[label="timeout and \n send COORDs"];*/ // No ANSWER, so I'm the new leader. Send out COORDs.
+Answered -> Election /*[label="timeout and \n send ELECTs"];*/ // Election leader didn't respond.
+
+/* Extra stuff to make graph prettier */
+_nil [style="invis"]; // Hidden state for transition to Init.
+_nil -> Init[label=""];
+}

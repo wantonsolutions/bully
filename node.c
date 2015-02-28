@@ -27,6 +27,9 @@ int lsocd;		//listening socket discriptor
 struct msg myMsg;	//message used for sending to each node
 struct clock myClock[MAX_NODES];
 
+struct timeval socketTimeout;
+FILE *logFile;
+unsigned int coordId;
 /* /Global Node Variables */
 
 void usage(char * cmd) {
@@ -266,7 +269,7 @@ int initMember(char * rPort, char * rAddress, int groupIndex){
 }
 
 /* 
- * listingSocket creates an unconnected UDP socket discriptor for listening on.
+ * listeningSocket creates an unconnected UDP socket discriptor for listening on.
  *
  * param lPort, the lPort number to listin on this node
  *
@@ -274,7 +277,7 @@ int initMember(char * rPort, char * rAddress, int groupIndex){
  * return the socket which can be used for listening
  * return -1 if the address could not be resolved
  */
-int listeningSocket(char *lPort){
+int listeningSocket(char* lPort){
 	int sockfd;
 	struct addrinfo hints, *servinfo, *p;
 	int rv;
@@ -314,6 +317,7 @@ int listeningSocket(char *lPort){
 	}
 
 	freeaddrinfo(servinfo);
+    return sockfd;
 }
 /*
  * Init sets the values for all of the nodes global variables by parsing the input parameters
@@ -348,7 +352,7 @@ int init(int argc, char **argv) {
 	initClock();
 
 	logFileName       = argv[3];
-	logInit();
+	logInit(logFileName);
 
 	timeoutValue      = strtoul(argv[4], &end, 10);
 	if (argv[4] == end) {
@@ -379,41 +383,34 @@ int init(int argc, char **argv) {
 /********************************************************************/
 /*			LOGGING					   */
 /********************************************************************/
-int logInit( void ){
-	FILE *f = fopen(logFileName,"w+");
-	if( f == NULL){
+int logInit( char *logFileName ){
+	if(groupListFileName[0] == '-' && strlen(groupListFileName) == 1){
+        logFile = stdout;
+    } else {
+        logFile = fopen(logFileName,"w+");
+    }
+    if( logFile == NULL){
 		fprintf(stderr,"Error opening log file\n");
 		exit(0);
 	}
-	fprintf(f,"Starting N%lu\n",port);
-	printClock(f,(struct clock *)myClock);
-	fclose(f);
+	fprintf(logFile,"Starting N%lu\n",port);
+	printClock(logFile,(struct clock *)myClock);
 }
 
 int logSend(struct clock* vclock, struct msg* message, unsigned int receipiant){
-	FILE *f = fopen(logFileName,"a");
-	if( f == NULL){
-		fprintf(stderr,"Error opening log file\n");
-		return -1;
-	}
-	fprintf(f,"Send");
-	printMessageType(f,message->msgID);
-	fprintf(f,"to N%u E:%u\n",receipiant,message->electionID);
-	printClock(f,(struct clock *)myClock);
-	fclose(f);
+	fprintf(logFile,"Send");
+	printMessageType(logFile,message->msgID);
+	fprintf(logFile,"to N%u E:%u\n",receipiant,message->electionID);
+	printClock(logFile,(struct clock *)myClock);
+    fflush(logFile);
 }
 
 int logReceive(struct clock* vclock, struct msg * message, unsigned int sender){
-	FILE *f = fopen(logFileName,"a");
-	if( f == NULL){
-		fprintf(stderr,"Error opening log file\n");
-		return -1;
-	}
-	fprintf(f,"Receive");
-	printMessageType(f,message->msgID);
-	fprintf(f,"from N%u E:%u\n",sender,message->electionID);
-	printClock(f,(struct clock *)myClock);
-	fclose(f);
+	fprintf(logFile,"Receive");
+	printMessageType(logFile,message->msgID);
+	fprintf(logFile,"from N%u E:%u\n",sender,message->electionID);
+	printClock(logFile,(struct clock *)myClock);
+    fflush(logFile);
 }
 
 void printMessageType(FILE *f, msgType msg){
@@ -433,6 +430,9 @@ void printMessageType(FILE *f, msgType msg){
 		case IAA:
 			fprintf(f," IAA ");
 			break;
+        case TIMEOUT:
+            fprintf(f," TIMEOUT ");
+            break;
 		default:
 			fprintf(stderr,"ERROR: Unknown Message type\n");
 	}
@@ -457,9 +457,104 @@ void printClock(FILE* f, struct clock* vclock){
 /********************************************************************/
 /*			/LOGGING		     		    */
 /********************************************************************/
-	
 
 
+/********************************************************************/
+/*			HELPERS     	     		    */
+/********************************************************************/
+
+/**
+ * Copies and converts a message from host order to network order.
+ *
+ * We know the size of struct msg, so we don't need to pass 
+ * it as a parameter
+ */
+void htonMsg(struct msg *hostMsg, struct msg *networkMsg){
+    networkMsg->msgID = htons(hostMsg->msgID);
+    networkMsg->electionID = htonl(hostMsg->electionID);
+    int i;
+    for (i = 0; i < MAX_NODES; i++){
+        networkMsg->vectorClock[i].nodeId = htons(hostMsg->vectorClock[i].nodeId);
+        networkMsg->vectorClock[i].time = htons(hostMsg->vectorClock[i].time);
+    }
+}
+
+/**
+ * Copies and converts a message from network order to host order.
+ *
+ * We know the size of struct msg, so we don't need to pass 
+ * it as a parameter.
+ */
+void ntohMsg(struct msg *networkMsg, struct msg *hostMsg){
+    hostMsg->msgID = ntohs(networkMsg->msgID);
+    hostMsg->electionID = ntohl(networkMsg->electionID);
+    int i;
+    for (i = 0; i < MAX_NODES; i++){
+        hostMsg->vectorClock[i].nodeId = ntohs(networkMsg->vectorClock[i].nodeId);
+        hostMsg->vectorClock[i].time = ntohs(networkMsg->vectorClock[i].time);
+    }
+}
+
+/**
+ * Generates the next AYATime interval.
+ *
+ */
+int generateAYA(){
+    int rn;
+    rn = random(); 
+
+    // scale to number between 0 and the 2*AYA time so that 
+    // the average value for the timeout is AYA time.
+
+    return rn % (2*AYATime);
+}
+
+/********************************************************************/
+/*			/HELPERS		     		    */
+/********************************************************************/
+
+
+int mainLoop(int fd){
+    int retval;
+
+    fd_set rfds;
+    FD_SET(fd, &rfds);
+
+    // Set socket timeout.
+    socketTimeout.tv_sec = timeoutValue;
+    socketTimeout.tv_usec = 0;
+
+    struct sockaddr_storage src_addr;
+    socklen_t addrlen = sizeof(struct sockaddr_storage);
+    // msg in host format.
+    struct msg hostBuf;
+
+    // Init state outside of loop?
+    while(1){
+        retval = select(1, &rfds, NULL, NULL, &socketTimeout);
+        struct msg msgBuf;
+        int bufSize = sizeof(msgBuf);
+        if(retval == 0) {
+            // We timed out for various reasons.
+            // This covers normal timeouts and AYATime.
+        } else if (retval == -1) {
+            //TODO Handle error.
+            perror("select()");
+            FD_ZERO(&rfds);
+            FD_SET(fd, &rfds);
+            continue;
+        } else {
+            // Receive message and fill src_addr struct.
+            retval = recvfrom(fd, &msgBuf, bufSize, 0, (struct sockaddr *) &src_addr, &addrlen);
+            // TODO Parse message and stuff. This involves using the network and host conversions.
+
+            // TODO Set msg_type.
+        }
+        // We know the message length, so we don't need to process it.
+        //TODO handleMsg(&msgBuf, sock);
+        // Handle message for current state and transition if needed.
+    }
+}
 
 
 int main(int argc, char ** argv) {
@@ -487,13 +582,7 @@ int main(int argc, char ** argv) {
 
 	int i;
 	for (i = 0; i < 10; i++) {
-		int rn;
-		rn = random(); 
-
-		// scale to number between 0 and the 2*AYA time so that 
-		// the average value for the timeout is AYA time.
-
-		int sc = rn % (2*AYATime);
+		int sc = generateAYA();
 		printf("Random number %d is: %d\n", i, sc);
 	}
 
@@ -511,8 +600,7 @@ int main(int argc, char ** argv) {
 	mergeClock((struct clock *)message.vectorClock);
 	logReceive((struct clock *)myClock,&message, 8889);
 
-
-
+    mainLoop(lsocd);
 	return 0;
 }
 

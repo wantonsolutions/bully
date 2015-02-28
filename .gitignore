@@ -1,5 +1,5 @@
 # C development
-c/http_client
+node
 
 *.o
 *.ko

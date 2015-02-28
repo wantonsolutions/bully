@@ -30,7 +30,7 @@ enum msgKind {
         COORD = 12,
         AYA = 20,
         IAA = 21,
-
+        TIMEOUT = 99,
 };
 typedef enum msgKind msgType;
 
