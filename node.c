@@ -23,7 +23,7 @@ unsigned long  AYATime;
 unsigned long  sendFailureProbability;
 
 struct group   myGroup;
-int lsocd;		//listening socket discriptor
+int soc;		//listening socket discriptor
 struct msg myMsg;	//message used for sending to each node
 struct clock myClock[MAX_NODES];
 
@@ -36,75 +36,6 @@ void usage(char * cmd) {
 	printf("usage: %s  portNum groupFileList logFile timeoutValue averageAYATime failureProbability \n",
 			cmd);
 }
-/*
-int nodeInGroup(int nodeId){
-	int nodeIndex = 0;
-	while(nodeIndex < MAX_NODES){
-		if(nodeId == myGroup.members[nodeIndex].nodeId){
-			return 1;
-		}
-		nodeIndex++;
-	return 0;
-}
-
-int getNodeIndex(int nodeId){
-	nodeIndex = 0;
-	while(nodeIndex < MAX_NODES){
-		if(nodeId == myGroup.members[nodeIndex].nodeId){
-			return nodeIndex;
-		}
-		nodeIndex++;
-	return -1;
-}
-
-int sendMsg(int nodeId){
-	int nodeIndex;
-	int sentBytes;
-	if(nodeId == port){
-		fprintf(stderr,"Error atempting to send message to self\n");
-		return -1;
-	}
-	if(!nodeInGroup(nodeId)){
-		fprintf(stderr,"Error recipient node %d not in group\n",nodeId);
-		return -2;
-	}
-	nodeIndex = getNodeIndex(nodeId);
-	// TODO check to ensure that the message totally sent
-	// TODO roll a random number before sending the message to determine if it was sent
-	// TODO network byte order make sure or push that responsability
-	if((sentBytes = sendto(
-					myGroup.members[nodeIndex].sockId, 
-					myMsg,
-				       	sizeof (struct msg),
-					0,
-				       	myGroup.members[nodeIndex].info.ai_addr,
-					myGroup.members[nodeIndex].info.ai_addrlen)) == -1) {
-		perr;or("talker: sendto");
-		return -3;
-	}
-	printf("message sent to %d \n",nodeId);
-	// TODO increment clock
-	// TODO log clock
-	return 0
-}
-
-struct msg* receiveMsg( void ){
-	struct sockadder_storage their_addr;
-	socketlen_t adder_len;
-	int numBytes;
-	char buf[sizeof (struct msg) + 1];
-
-	adder_len = sizeof(their_addr);
-	if((numbytes = recvfrom(lsocd,buf, sizeof(struct msg), 0,(struct sockaddr *)&their_addr, &addr_len)) == -1){
-		perror("recvfrom");
-		return NULL;
-	}
-	printf("lister got package from %s\n", inet_ntop(their_addr.ss_family, get_in_addr((struct sockaddr *)&their_addr),s, sizeof s));
-	printf("listener: packet is %d bytes long\n", numbytes);
-	buf[numbytes] = '\0';
-	printf("listener: packet contains \"%s\"\n",buf);
-	}
-*/
 
 /*
  * initClock creates a clock for this node, the values are set under the assumption that the group has been set up successfully
@@ -321,7 +252,7 @@ int initMember(char * rPort, char * rAddress, int groupIndex){
 	myGroup.members[groupIndex].nodeId = atoi(rPort);
 	myGroup.members[groupIndex].sockId = sockfd;
 	myGroup.members[groupIndex].info = *p;
-	return;
+	return 0;
 }
 
 /* 
@@ -397,8 +328,8 @@ int init(int argc, char **argv) {
 		err++;
 	}
 
-	lsocd = listeningSocket(argv[1]);
-	if(lsocd < 0){
+	soc = listeningSocket(argv[1]);
+	if(soc < 0){
 		fprintf(stderr, "listening socket initalization error on port %s\n", argv[1]);
 		err++;
 	}
@@ -604,25 +535,25 @@ in_port_t get_in_port(struct sockaddr *sa)
 /********************************************************************/
 /*			Send Recive Wrappers 			    */
 /********************************************************************/
-ssize_t recvMessage(int s, void* buf,size_t len, int flags, struct sockaddr *from, socklen_t *fromlen){
+ssize_t recvMessage(struct msg * buf, struct sockaddr *from, socklen_t *fromlen){
 	int ret;
-	struct msg * netMsg = (struct msg *)malloc(sizeof (struct msg));
-	ret = recvfrom(s, netMsg, len, flags, from, fromlen);
-	ntohMsg(netMsg,(struct msg *)buf);
-	logReceive(myClock,(struct msg *)buf,(unsigned int)get_in_port(from));
-	free(netMsg);
+	struct msg netMsg;
+	ret = recvfrom(soc, (void *) &netMsg, sizeof (struct msg), 0, from, fromlen);
+	ntohMsg(&netMsg,buf);
+	logReceive(myClock,buf,(unsigned int)get_in_port(from));
+	mergeClock(buf->vectorClock);
 	return ret;
 }
 
-size_t sendMessage(int s, void* buf, size_t len, int flags, struct sockaddr *to, socklen_t tolen){
+size_t sendMessage(struct msg* buf, struct sockaddr *to, socklen_t tolen){
 	incrementClock();
-	logSend(myClock,(struct msg *)buf,(unsigned int)get_in_port(to));
+	logSend(myClock,buf,(unsigned int)get_in_port(to));
 	if(sendFailed()){
-		return len;
+		return sizeof (struct msg);
 	} else {	
 		struct msg networkMsg;
-		htonMsg((struct msg *)buf, &networkMsg);
-		return sendto(s, (void *)&networkMsg, len, flags, to, tolen);
+		htonMsg(buf, &networkMsg);
+		return sendto(soc, (void *)&networkMsg, sizeof networkMsg, 0, to, tolen);
 	}
 }
 
@@ -655,6 +586,7 @@ int mainLoop(int fd){
             // We timed out for various reasons.
             // This covers normal timeouts and AYATime.
         } else if (retval == -1) {
+		
             //TODO Handle error.
             perror("select()");
             FD_ZERO(&rfds);
@@ -704,22 +636,7 @@ int main(int argc, char ** argv) {
 		int sc = generateAYA();
 		printf("Random number %d is: %d\n", i, sc);
 	}
-
-	//testing
-	struct msg message;
-	message.msgID = COORD;
-	message.electionID = 1;
-	for(i=0;i<MAX_NODES;i++){
-		message.vectorClock[i].nodeId = i + 8888;
-		message.vectorClock[i].time = i;
-	}
-
-	//logging tests
-	incrementClock();
-	mergeClock((struct clock *)message.vectorClock);
-	logReceive((struct clock *)myClock,&message, 8889);
-
-    mainLoop(lsocd);
+	mainLoop(soc);
 	return 0;
 }
 
