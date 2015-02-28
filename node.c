@@ -29,7 +29,10 @@ struct clock myClock[MAX_NODES];
 
 struct timeval socketTimeout;
 FILE *logFile;
-unsigned int coordId;
+unsigned int myID;
+unsigned int coordID;
+unsigned int state = STATE_INIT;
+unsigned int myElectionId = 0;
 /* /Global Node Variables */
 
 void usage(char * cmd) {
@@ -323,6 +326,7 @@ int init(int argc, char **argv) {
 	int err = 0;
 
 	port = strtoul(argv[1], &end, 10);
+    myID = port;
 	if (argv[1] == end) {
 		printf("Port conversion error\n");
 		err++;
@@ -418,7 +422,13 @@ void printMessageType(FILE *f, msgType msg){
 			fprintf(f," IAA ");
 			break;
         case TIMEOUT:
-            fprintf(f," TIMEOUT ");
+            // If state is normal, the timeout is definitely AYATime 
+            // since we don't timeout on anything else.
+            if (state == STATE_NORMAL) {
+                fprintf(f," AYATIME ");
+            } else {
+                fprintf(f," TIMEOUT ");
+            }
             break;
 		default:
 			fprintf(stderr,"ERROR: Unknown Message type\n");
@@ -562,9 +572,190 @@ size_t sendMessage(struct msg* buf, struct sockaddr *to, socklen_t tolen){
 /********************************************************************/
 
 
+/********************************************************************/
+/*			MESSAGE HANDLER HELPERS		     		    */
+/********************************************************************/
+
+/**
+ * Responds to the message with an ANSWER
+ */
+void sendANSWER(struct msg *hostBuf, struct sockaddr *src_addr){
+    //TODO Sends a response to the node pointed to by src_addr.
+}
+
+/**
+ * Sends an ELECT message to all nodes above you.
+ */
+void sendELECTs(){
+    //TODO Update Election ID?
+}
+
+/**
+ * Send AYA to the coordinator,
+ */
+void sendAYA(){
+    //TODO Get coordinator from the coordID.
+    //TODO Send AYA message.
+}
+
+/**
+ * Send an IAA back to the sender.
+ * We can extract the nodeID from the message
+ */
+void sendIAA(struct msg *message){
+    //TODO Extract nodeID and send in new message.
+}
+
+
+/**
+ * Send COORD to all nodes below you and set CoordID to myID.
+ */
+void sendCOORDs(){
+    coordID = myID;
+    //TODO Send COORDs
+}
+
+/********************************************************************/
+/*			/MESSAGE HANDLER HELPERS		     		    */
+/********************************************************************/
+
+void handleMsg(msgType messageType, struct msg *message, struct sockaddr *src_addr){
+    switch(messageType){
+        case ELECT:
+            /*
+             * When we get an ELECT message, in every state except for elect 
+             * and answered, we start a new election. We also respond with an answer if we need to.
+             */
+            switch(state){
+                //Respond with Answer. Do not start a new election and do not switch states.
+                case STATE_ANSWERED:
+                case STATE_ELECTION:
+                    sendANSWER(message, src_addr);
+                    //TODO Update timeout value.
+                    break;
+                case STATE_INIT:
+                case STATE_NORMAL:
+                case STATE_AYA:
+                    // Respond with ANSWER.
+                    sendANSWER(message, src_addr);
+                    // Start Election for INIT, NORMAL and AYA.
+                    sendELECTs();
+                    state = STATE_ELECTION;
+                    break;
+                default:
+                    break;
+            }
+            break;
+        case ANSWER:
+            /**
+             * ANSWER is not valid for anything that isn't state ELECTION.
+             */
+            switch (state) {
+                case STATE_ELECTION:
+                    // Transition to state_ANSWERED 
+                    // TODO Set new timeout.
+                    state = STATE_ANSWERED;
+                    break;
+                default:
+                    break;
+            }
+            break;
+        case COORD:
+            /**
+             * COORD cancels all previous activities and sets a new coordinator.
+             */
+            switch (state) {
+                case STATE_INIT:
+                case STATE_NORMAL:
+                case STATE_AYA:
+                case STATE_ANSWERED:
+                case STATE_ELECTION:
+                default:
+                    //TODO Update election ID.
+                    //TODO Update coordinator ID.
+                    state = STATE_NORMAL;
+                    //TODO set timeout to AYATime
+                    break;
+            }
+            break;
+        case AYA:
+            /**
+             * Only respond to AYA if you are the current coordinator and are in state NORMAL or ELECTION.
+             * At state ANSWERED, there is a node above you.
+             */
+            switch (state) {
+                case STATE_NORMAL:
+                case STATE_ELECTION:
+                    // Node was coordinator before the election started.
+                    if (coordID == myID){
+                        //TODO respond to AYA with IAA.
+                        sendIAA(message);
+                    }
+                    break;
+                default:
+                    break;
+            }
+            break;
+        case IAA:
+            /**
+             * IAA is only really valid if you are in state AYA and the election id is the same.
+             */
+            switch (state) {
+                case STATE_AYA:
+                    //TODO set new Timeout
+                    state = STATE_NORMAL;
+                    break;
+                default:
+                    break;
+            }
+            break;
+        case TIMEOUT:
+            switch (state) {
+                /**
+                 * I won, and I'm the coordinator!
+                 * Send out COORDs.
+                 */
+                case STATE_ELECTION:
+                    coordID = myID;
+                    sendCOORDs();
+                    // TODO Set up new timeout. -1.
+                    //TODO Send out COORDs.
+                    state = STATE_NORMAL;
+                    break;
+                /**
+                 * I timed out, but since I'm normal, it's really an AYATime.
+                 */
+                case STATE_NORMAL:
+                    sendAYA();
+                    //TODO Set up new timeout!
+                    state = STATE_AYA;
+                    break;
+                /**
+                 *  //Expecting a message, but it didn't show up. Start an election.
+                 */
+                case STATE_INIT:
+                case STATE_AYA:
+                case STATE_ANSWERED:
+                    sendELECTs();
+                    //TODO Set up new timeout.
+                    state = STATE_ELECTION;
+                    break;
+                default:
+                    break;
+            }
+            break;
+        default:
+            break;
+    }
+}
+
+/**
+ * The main loop where we wait for a message and call a msg handler.
+ *
+ */
 int mainLoop(int fd){
     int retval;
-
+    msgType messageType;
     fd_set rfds;
     FD_SET(fd, &rfds);
 
@@ -577,14 +768,15 @@ int mainLoop(int fd){
     // msg in host format.
     struct msg hostBuf;
 
-    // Init state outside of loop?
+    // Loop without init state.
     while(1){
         retval = select(1, &rfds, NULL, NULL, &socketTimeout);
         struct msg msgBuf;
-        int bufSize = sizeof(msgBuf);
         if(retval == 0) {
             // We timed out for various reasons.
             // This covers normal timeouts and AYATime.
+            messageType = TIMEOUT;
+            // TODO Do we need to add it back to rfds?
         } else if (retval == -1) {
 		
             //TODO Handle error.
@@ -594,13 +786,14 @@ int mainLoop(int fd){
             continue;
         } else {
             // Receive message and fill src_addr struct.
-            retval = recvfrom(fd, &msgBuf, bufSize, 0, (struct sockaddr *) &src_addr, &addrlen);
-            // TODO Parse message and stuff. This involves using the network and host conversions.
-
-            // TODO Set msg_type.
+            retval = recvfrom(fd, &msgBuf, sizeof(msgBuf), 0, (struct sockaddr *) &src_addr, &addrlen);
+            // Parse message and stuff. This involves using the network and host conversions.
+            ntohMsg(&msgBuf, &hostBuf);
+            // Set msg_type.
+            messageType = hostBuf.msgID;
         }
         // We know the message length, so we don't need to process it.
-        //TODO handleMsg(&msgBuf, sock);
+        handleMsg(messageType, &hostBuf, (struct sockaddr *) &src_addr);
         // Handle message for current state and transition if needed.
     }
 }
