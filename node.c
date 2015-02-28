@@ -108,18 +108,84 @@ struct msg* receiveMsg( void ){
  */
 
 
+int clockMergeError(struct clock* vclock){
+	int i, j;
+	//check for remote node having a higher value then the local clock
+	for(i=0;i<MAX_NODES;i++){
+		for(j=0;j<MAX_NODES;j++){
+			if(myClock[i].nodeId == port && vclock[i].nodeId == port){
+				if(myClock[i].time < vclock[j].time){
+					fprintf(stderr,"Error: remote node has clock value greater than local time\n");
+					return -1;
+				}
+			}
+		}
+	}
+	//check for existence of group members
+	for(i=0;i<MAX_NODES;i++){
+		int found = 0;
+		for(j=0;j<MAX_NODES;j++){
+			if(myClock[i].nodeId == vclock[j].nodeId){
+				found = 1;
+			}
+		}
+		if(!found){
+			fprintf(stderr,"Error: remote node has inconsistant group list, group member N%u missing\n",myClock[i].nodeId);
+			return -2;
+		}
+	}
+	return 1;
+}
+
 /*
  * mergeClock combines a vector clock with the global one for this node
  */
 void mergeClock(struct clock* vclock){
-	int i;
+	if(clockMergeError(vclock) < 0){
+		return;
+	}
+	int i, j;
 	for(i=0;i<MAX_NODES;i++){
-		if(vclock[i].time > myClock[i].time){
-			myClock[i].time = vclock[i].time;
+		for(j=0;j<MAX_NODES;j++){
+			if((myClock[i].nodeId == vclock[j].nodeId) && (vclock[j].time > myClock[i].time)){
+				myClock[i].time = vclock[j].time;
+				continue;
+			}
 		}
 	}
 
 }
+
+void incrementClock(){
+	int i;
+	for(i=0;i<MAX_NODES;i++){
+		if(myClock[i].nodeId == port){
+			myClock[i].time++;
+			return;
+		}
+	}
+}
+
+/**************************************************************************/
+/*			 Group						  */
+/**************************************************************************/
+/* returns the addrInfo of a group member 
+ * if the group member is not in the group returns NULL
+ */
+struct addrinfo * getGroupAdderInfo(unsigned int nodeId){
+	int i;
+	for(i=0;i<MAX_NODES;i++){
+		if(myGroup.members[i].nodeId == nodeId){
+			return &myGroup.members[i].info;
+		}
+	}
+	fprintf(stderr,"Error, node N%u not in group",nodeId);
+	return NULL;
+}
+
+/**************************************************************************/
+/*			 /Group						  */
+/**************************************************************************/
 
 /**************************************************************************/
 /*			Initalization					  */
@@ -178,7 +244,7 @@ void initGroup(char * groupListFileName){
 	char addr[BUFFLEN];
 	int includesSelf = 0;
 	//alternate feilds and set up node id's and sockets
-	while (fscanf(fp, "%1023s%",buf) == 1){//read 1 feild into buffer at a time
+	while (fscanf(fp, "%1023s",buf) == 1){//read 1 feild into buffer at a time
 		if((fields /2) >= MAX_NODES){
 			fprintf(stderr, "Error group nodes exceed maximum of %d\n", MAX_NODES);
 		}
@@ -209,7 +275,7 @@ void initGroup(char * groupListFileName){
 	return;
 }
 
-
+  
 /*
  * Talking socket creates a UDP socket discriptor for talking on. and returns that socket discriptor.
  * 
@@ -359,7 +425,7 @@ int init(int argc, char **argv) {
 	AYATime  = strtoul(argv[5], &end, 10);
 	if (argv[5] == end) {
 		printf("AYATime conversion error\n");
-		err++;
+	err++;
 	}
 
 	sendFailureProbability  = strtoul(argv[6], &end, 10);
@@ -503,13 +569,15 @@ int main(int argc, char ** argv) {
 	message.electionID = 1;
 	for(i=0;i<MAX_NODES;i++){
 		message.vectorClock[i].nodeId = i + 8888;
-		message.vectorClock[i].time = i;
+		message.vectorClock[i].time = i + 1;
 	}
 
 	//logging tests
-	myClock[0].time++;
+	incrementClock();
 	mergeClock((struct clock *)message.vectorClock);
 	logReceive((struct clock *)myClock,&message, 8889);
+
+
 
 
 
