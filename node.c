@@ -110,19 +110,75 @@ struct msg* receiveMsg( void ){
  * initClock creates a clock for this node, the values are set under the assumption that the group has been set up successfully
  */
 
+int clockMergeError(struct clock* vclock){
+	int i, j;
+	//check for remote node having a higher value then the local clock
+	for(i=0;i<MAX_NODES;i++){
+		for(j=0;j<MAX_NODES;j++){
+			if(myClock[i].nodeId == port && vclock[i].nodeId == port){
+				if(myClock[i].time < vclock[j].time){
+					fprintf(stderr,"Error: remote node has clock value greater than local time\n");
+					return -1;
+				}
+			}
+		}
+	}
+	//check for existence of group members
+	for(i=0;i<MAX_NODES;i++){
+		int found = 0;
+		for(j=0;j<MAX_NODES;j++){
+			if(myClock[i].nodeId == vclock[j].nodeId){
+				found = 1;
+			}
+		}
+		if(!found){
+			fprintf(stderr,"Error: remote node has inconsistant group list, group member N%u missing\n",myClock[i].nodeId);
+			return -2;
+		}
+	}
+	return 1;
+}
 
 /*
  * mergeClock combines a vector clock with the global one for this node
  */
 void mergeClock(struct clock* vclock){
-	int i;
+	if(clockMergeError(vclock) < 0){
+		return;
+	}
+	int i, j;
 	for(i=0;i<MAX_NODES;i++){
-		if(vclock[i].time > myClock[i].time){
-			myClock[i].time = vclock[i].time;
+		for(j=0;j<MAX_NODES;j++){
+			if((myClock[i].nodeId == vclock[j].nodeId) && (vclock[j].time > myClock[i].time)){
+				myClock[i].time = vclock[j].time;
+				continue;
+			}
 		}
 	}
 
 }
+
+/**************************************************************************/
+/*			 Group						  */
+/**************************************************************************/
+/* returns the addrInfo of a group member 
+ * if the group member is not in the group returns NULL
+ */
+struct addrinfo * getGroupAdderInfo(unsigned int nodeId){
+	int i;
+	for(i=0;i<MAX_NODES;i++){
+		if(myGroup.members[i].nodeId == nodeId){
+			return &myGroup.members[i].info;
+		}
+	}
+	fprintf(stderr,"Error, node N%u not in group",nodeId);
+	return NULL;
+}
+
+/**************************************************************************/
+/*			 /Group						  */
+/**************************************************************************/
+
 
 /**************************************************************************/
 /*			Initalization					  */
@@ -507,6 +563,19 @@ int generateAYA(){
     // the average value for the timeout is AYA time.
 
     return rn % (2*AYATime);
+}
+
+/*
+ * increments the local clock value
+*/
+void incrementClock(){
+	int i;
+	for(i=0;i<MAX_NODES;i++){
+		if(myClock[i].nodeId == port){
+			myClock[i].time++;
+			return;
+		}
+	}
 }
 
 /********************************************************************/
