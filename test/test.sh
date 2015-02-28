@@ -11,7 +11,7 @@ do
 			bool=1
 		else
 			echo $word
-			`../node $word $1 $word.txt $2 $3 $4` &
+			`../node $word $1 - $2 $3 $4` &
 			bool=0
 		fi
 	done
