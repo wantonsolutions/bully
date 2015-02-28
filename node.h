@@ -1,6 +1,6 @@
 #define BUFFLEN 1024
 #define STATE_INIT 0
-#define STATE_WAITING 1
+#define STATE_NORMAL 1
 #define STATE_AYA 2
 #define STATE_ELECTION 3
 #define STATE_ANSWERED 4
