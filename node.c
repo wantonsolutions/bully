@@ -63,10 +63,11 @@ int clockMergeError(struct clock* vclock){
 		for(j=0;j<MAX_NODES;j++){
 			if(myClock[i].nodeId == vclock[j].nodeId){
 				found = 1;
+                break;
 			}
 		}
 		if(!found){
-			fprintf(stderr,"Error: remote node has inconsistant group list, group member N%u missing\n",myClock[i].nodeId);
+			fprintf(stderr,"Error: remote node has inconsistant group list, group member N%u missing\n",vclock[i].nodeId);
 			return -2;
 		}
 	}
@@ -76,9 +77,9 @@ int clockMergeError(struct clock* vclock){
 /*
  * mergeClock combines a vector clock with the global one for this node
  */
-void mergeClock(struct clock* vclock){
+int mergeClock(struct clock* vclock){
 	if(clockMergeError(vclock) < 0){
-		return;
+		return -1;
 	}
 	int i, j;
 	for(i=0;i<MAX_NODES;i++){
@@ -89,7 +90,7 @@ void mergeClock(struct clock* vclock){
 			}
 		}
 	}
-
+    return 0;
 }
 
 void incrementClock(){
@@ -388,8 +389,9 @@ int init(int argc, char **argv) {
 /*			LOGGING					   */
 /********************************************************************/
 int logInit( char *logFileName ){
-	if(groupListFileName[0] == '-' && strlen(groupListFileName) == 1){
+	if(logFileName[0] == '-' && strlen(logFileName) == 1){
         logFile = stdout;
+        printf("Log file is stdout.");
     } else {
         logFile = fopen(logFileName,"w+");
     }
@@ -524,9 +526,9 @@ int sendFailed(void){
 	int rn;
 	rn = random() % 100;
 	if( rn > sendFailureProbability){
-		return 1;
+		return 0;
 	}
-	return 0;
+	return 1;
 }
 	
 in_port_t get_in_port(struct sockaddr *sa)
@@ -575,7 +577,9 @@ ssize_t recvMessage(struct msg * buf, struct sockaddr *from, socklen_t *fromlen)
 	struct msg netMsg;
 	ret = recvfrom(soc, (void *) &netMsg, sizeof (struct msg), 0, from, fromlen);
 	ntohMsg(&netMsg,buf);
-	mergeClock(buf->vectorClock);
+	if (mergeClock(buf->vectorClock) == -1){
+        return -1;
+    }
     incrementClock();
 	logReceive(myClock,buf,(unsigned int)get_in_port(from));
 	return ret;
@@ -719,6 +723,7 @@ void handleMsg(msgType messageType, struct msg *message, struct sockaddr *src_ad
                 default:
                     myElectionID = myElectionID > message->electionID ? myElectionID : message->electionID;
                     coordID = srcNodeID;
+                    printf("Coordinator is %d", srcNodeID);
                     state = STATE_NORMAL;
                     //TODO set timeout to AYATime
                     break;
@@ -813,17 +818,17 @@ int mainLoop(int fd){
     struct sockaddr_storage src_addr;
     socklen_t addrlen = sizeof(struct sockaddr_storage);
     // msg in host format.
-    struct msg hostBuf;
     while(1){
         printf("LOOP: State: %d\n", state);
-        retval = select(1, &rfds, NULL, NULL, &socketTimeout);
-        struct msg msgBuf;
+        retval = select(fd + 1, &rfds, NULL, NULL, &socketTimeout);
+        struct msg hostBuf;
         if(retval == 0) {
             // We timed out for various reasons.
             // This covers normal timeouts and AYATime.
             messageType = TIMEOUT;
             printf("We have a timeout.\n");
-            // TODO Do we need to add it back to rfds?
+            // Removed from set on timeout, so add it back.
+            FD_SET(fd, &rfds);
         } else if (retval == -1) {
             perror("select()");
             FD_ZERO(&rfds);
@@ -831,9 +836,10 @@ int mainLoop(int fd){
             continue;
         } else {
             // Receive message and fill src_addr struct.
-            retval = recvfrom(fd, &msgBuf, sizeof(msgBuf), 0, (struct sockaddr *) &src_addr, &addrlen);
-            // Parse message and stuff. This involves using the network and host conversions.
-            ntohMsg(&msgBuf, &hostBuf);
+            retval = recvMessage(&hostBuf, (struct sockaddr *) &src_addr, &addrlen);
+            if (retval == -1){
+                printf("Invalid message received.\n");
+            }
             // Set msg_type.
             messageType = hostBuf.msgID;
         }

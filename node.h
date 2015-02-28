@@ -5,7 +5,7 @@
 #define STATE_ELECTION 3
 #define STATE_ANSWERED 4
 
-void mergeClock(struct clock* vclock);
+int mergeClock(struct clock* vclock);
 
 void usage(char * cmd);
 void initClock( void );
