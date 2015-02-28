@@ -191,13 +191,11 @@ void initGroup(char * groupListFileName){
 			if(port == atoi(buf)){
 				//set the self referencing member to have ID value and nothing else
 				printf("Adding Self To group\n");
-				myGroup.members[fields/2].nodeId = port;
-				//TODO determine what own address should look like
 				includesSelf = 1;
-			} else {
-				if(initMember((char *)&buf,(char *)&addr,fields/2) < 0){
-					exit(0);
-				}
+			}
+			//create yourself like any other group member
+			if(initMember((char *)&buf,(char *)&addr,fields/2) < 0){
+				exit(0);
 			}
 			myGroup.size++;
 		}
