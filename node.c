@@ -102,7 +102,7 @@ struct addrinfo * getGroupAdderInfo(unsigned int nodeId){
 	int i;
 	for(i=0;i<MAX_NODES;i++){
 		if(myGroup.members[i].nodeId == nodeId){
-			return &myGroup.members[i].info;
+			return &(myGroup.members[i].info);
 		}
 	}
 	fprintf(stderr,"Error, node N%u not in group",nodeId);
@@ -537,6 +537,31 @@ in_port_t get_in_port(struct sockaddr *sa)
     return (((struct sockaddr_in6*)sa)->sin6_port);
 }
 
+/**
+ *  Copies the current vector clock into the message.
+ *
+ */
+void copyClock(struct msg* buf){
+    int i;
+    for(i = 0; i < MAX_NODES; i++){
+        buf->vectorClock[i].nodeId = myClock[i].nodeId;
+        buf->vectorClock[i].time = myClock[i].time;
+    }
+}
+
+/**
+ * Creates a message with the current vector clock 
+ * using the messageType and election ID.
+ *
+ */
+void constructMessage(msgType messageType, unsigned int electionID, struct msg* buf){
+    buf->msgID = messageType;
+    buf->electionID = electionID;
+    int i;
+    copyClock(buf);
+}
+
+
 /********************************************************************/
 /*			/HELPERS		     		    */
 /********************************************************************/
@@ -550,20 +575,23 @@ ssize_t recvMessage(struct msg * buf, struct sockaddr *from, socklen_t *fromlen)
 	struct msg netMsg;
 	ret = recvfrom(soc, (void *) &netMsg, sizeof (struct msg), 0, from, fromlen);
 	ntohMsg(&netMsg,buf);
-	logReceive(myClock,buf,(unsigned int)get_in_port(from));
 	mergeClock(buf->vectorClock);
+    incrementClock();
+	logReceive(myClock,buf,(unsigned int)get_in_port(from));
 	return ret;
 }
 
-size_t sendMessage(struct msg* buf, struct sockaddr *to, socklen_t tolen){
+size_t sendMessage(msgType messageType, unsigned int electionID, struct sockaddr *to, socklen_t tolen){
+    struct msg buf;
 	incrementClock();
-	logSend(myClock,buf,(unsigned int)get_in_port(to));
+    constructMessage(messageType, electionID, &buf);
+	logSend(myClock,&buf,(unsigned int)get_in_port(to));
 	if(sendFailed()){
 		return sizeof (struct msg);
 	} else {	
 		struct msg networkMsg;
-		htonMsg(buf, &networkMsg);
-		return sendto(soc, (void *)&networkMsg, sizeof networkMsg, 0, to, tolen);
+		htonMsg(&buf, &networkMsg);
+		return sendto(soc, (void *)&networkMsg, sizeof(networkMsg), 0, to, tolen);
 	}
 }
 
@@ -580,7 +608,8 @@ size_t sendMessage(struct msg* buf, struct sockaddr *to, socklen_t tolen){
  * Responds to the message with an ANSWER
  */
 void sendANSWER(struct msg *hostBuf, struct sockaddr *src_addr){
-    //TODO Sends a response to the node pointed to by src_addr.
+    //TODO Which election Id do we use?
+    sendMessage(ANSWER, myElectionId, src_addr, sizeof(struct sockaddr));
 }
 
 /**
@@ -588,22 +617,30 @@ void sendANSWER(struct msg *hostBuf, struct sockaddr *src_addr){
  */
 void sendELECTs(){
     //TODO Update Election ID?
+    int i;
+    for(i = 0; i < MAX_NODES; i++){
+        if(myGroup.members[i].nodeId > myID) {
+            sendMessage(ELECT, myElectionId, 
+                    getGroupAdderInfo(myGroup.members[i].nodeId)->ai_addr,
+                    sizeof(struct sockaddr));
+        }
+    }
 }
 
 /**
  * Send AYA to the coordinator,
  */
 void sendAYA(){
-    //TODO Get coordinator from the coordID.
-    //TODO Send AYA message.
+    struct sockaddr * coordAddr = getGroupAdderInfo(coordID)->ai_addr;
+    sendMessage(AYA, myID, coordAddr, sizeof(struct sockaddr));
 }
 
 /**
  * Send an IAA back to the sender.
  * We can extract the nodeID from the message
  */
-void sendIAA(struct msg *message){
-    //TODO Extract nodeID and send in new message.
+void sendIAA(struct msg *message, struct sockaddr *from){
+    sendMessage(AYA, message->electionID, from, sizeof(struct sockaddr));
 }
 
 
@@ -612,7 +649,14 @@ void sendIAA(struct msg *message){
  */
 void sendCOORDs(){
     coordID = myID;
-    //TODO Send COORDs
+    int i;
+    for(i = 0; i < MAX_NODES; i++){
+        if(myGroup.members[i].nodeId < myID) {
+            sendMessage(COORD, myElectionId, 
+                    getGroupAdderInfo(myGroup.members[i].nodeId)->ai_addr,
+                    sizeof(struct sockaddr));
+        }
+    }
 }
 
 /********************************************************************/
@@ -688,8 +732,7 @@ void handleMsg(msgType messageType, struct msg *message, struct sockaddr *src_ad
                 case STATE_ELECTION:
                     // Node was coordinator before the election started.
                     if (coordID == myID){
-                        //TODO respond to AYA with IAA.
-                        sendIAA(message);
+                        sendIAA(message, src_addr);
                     }
                     break;
                 default:
@@ -719,7 +762,6 @@ void handleMsg(msgType messageType, struct msg *message, struct sockaddr *src_ad
                     coordID = myID;
                     sendCOORDs();
                     // TODO Set up new timeout. -1.
-                    //TODO Send out COORDs.
                     state = STATE_NORMAL;
                     break;
                 /**
