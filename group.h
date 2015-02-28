@@ -10,8 +10,7 @@
 
 struct member{
 	unsigned int nodeId;
-	int sockId;
-	struct addrinfo info;
+	struct sockaddr nodeAddr;
 };
 
 struct group {

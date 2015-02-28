@@ -108,11 +108,11 @@ void incrementClock(){
 /* returns the addrInfo of a group member 
  * if the group member is not in the group returns NULL
  */
-struct addrinfo * getGroupAdderInfo(unsigned int nodeId){
+struct sockaddr * getGroupAddr(unsigned int nodeId){
 	int i;
 	for(i=0;i<MAX_NODES;i++){
 		if(myGroup.members[i].nodeId == nodeId){
-			return &myGroup.members[i].info;
+			return &myGroup.members[i].nodeAddr;
 		}
 	}
 	fprintf(stderr,"Error, node N%u not in group",nodeId);
@@ -192,7 +192,7 @@ void initGroup(char * groupListFileName){
 				//set the self referencing member to have ID value and nothing else
 				printf("Adding Self To group\n");
 				myGroup.members[fields/2].nodeId = port;
-				myGroup.members[fields/2].sockId = -1;// set the sending socket to -1
+				//TODO determine what own address should look like
 				includesSelf = 1;
 			} else {
 				if(initMember((char *)&buf,(char *)&addr,fields/2) < 0){
@@ -262,8 +262,14 @@ int initMember(char * rPort, char * rAddress, int groupIndex){
 
 	//set member variables
 	myGroup.members[groupIndex].nodeId = atoi(rPort);
-	myGroup.members[groupIndex].sockId = sockfd;
-	myGroup.members[groupIndex].info = *p;
+	
+	//TODO copy sock addr from p to the node identifier
+	myGroup.members[groupIndex].nodeAddr.sa_family = p->ai_addr->sa_family;
+	int i;
+	//14 is the length of the protocol address
+	for(i=0;i<14;i++){
+		myGroup.members[groupIndex].nodeAddr.sa_data[i] = p->ai_addr->sa_data[i];
+	}
 	return 0;
 }
 
@@ -530,7 +536,6 @@ in_port_t get_in_port(struct sockaddr *sa)
     if (sa->sa_family == AF_INET) {
         return (((struct sockaddr_in*)sa)->sin_port);
     }
-
     return (((struct sockaddr_in6*)sa)->sin6_port);
 }
 
@@ -578,17 +583,20 @@ ssize_t recvMessage(struct msg * buf, struct sockaddr *from, socklen_t *fromlen)
 	return ret;
 }
 
-size_t sendMessage(msgType messageType, unsigned int electionID, struct sockaddr *to, socklen_t tolen){
-    struct msg buf;
+size_t sendMessage(msgType messageType, unsigned int electionID, unsigned int nodeId){
+	struct msg buf;
+	struct sockaddr nodeAddr;
+	//TODO catch null exception
+        nodeAddr = *getGroupAddr(nodeId);
 	incrementClock();
-    constructMessage(messageType, electionID, &buf);
-	logSend(myClock,&buf,(unsigned int)get_in_port(to));
+	constructMessage(messageType, electionID, &buf);
+	logSend(myClock,&buf,nodeId);
 	if(sendFailed()){
 		return sizeof (struct msg);
 	} else {	
 		struct msg networkMsg;
 		htonMsg(&buf, &networkMsg);
-		return sendto(soc, (void *)&networkMsg, sizeof(networkMsg), 0, to, tolen);
+		return sendto(soc, (void *)&networkMsg, sizeof(networkMsg), 0, &nodeAddr, sizeof nodeAddr);
 	}
 }
 
@@ -618,9 +626,7 @@ void sendELECTs(unsigned int electionID){
     int i;
     for(i = 0; i < MAX_NODES; i++){
         if(myGroup.members[i].nodeId > myID) {
-            sendMessage(ELECT, electionID,
-                    getGroupAdderInfo(myGroup.members[i].nodeId)->ai_addr,
-                    sizeof(struct sockaddr));
+            sendMessage(ELECT, electionID,myGroup.members[i].nodeId);
         }
     }
 }
@@ -629,8 +635,7 @@ void sendELECTs(unsigned int electionID){
  * Send AYA to the coordinator,
  */
 void sendAYA(){
-    struct sockaddr * coordAddr = getGroupAdderInfo(coordID)->ai_addr;
-    sendMessage(AYA, myID, coordAddr, sizeof(struct sockaddr));
+    sendMessage(AYA, myID, coordId);
 }
 
 /**
@@ -651,7 +656,7 @@ void sendCOORDs(){
     for(i = 0; i < MAX_NODES; i++){
         if(myGroup.members[i].nodeId < myID) {
             sendMessage(COORD, myElectionID,
-                    getGroupAdderInfo(myGroup.members[i].nodeId)->ai_addr,
+                    getGroupAddr(myGroup.members[i].nodeId),
                     sizeof(struct sockaddr));
         }
     }
