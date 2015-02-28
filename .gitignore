@@ -1,5 +1,5 @@
 # C development
-c/http_client
+node
 
 *.o
 *.ko
@@ -75,3 +75,6 @@ __MACOSX/
 *.odt
 *.xls
 *.ods
+
+#particulars
+state.dot.png
