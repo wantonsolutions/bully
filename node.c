@@ -448,6 +448,15 @@ void printMessageType(FILE *f, msgType msg){
 	}
 }
 
+void printMessage(struct msg * message){
+	fprintf(stdout,"Msg TYPE:\t%d\nMsg ElId:\t%d\n",message->msgID,message->electionID);
+	fprintf(stdout,"----CLOCK----\n");
+	int i;
+	for(i=0;i<MAX_NODES;i++){
+		fprintf(stdout,"id: %u\ttime%u\t\n",message->vectorClock[i].nodeId,message->vectorClock[i].time);
+	}
+}
+
 
 void printClock(FILE* f, struct clock* vclock){
 	fprintf(f,"N%lu {",port);
