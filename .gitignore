@@ -75,3 +75,6 @@ __MACOSX/
 *.odt
 *.xls
 *.ods
+
+#particulars
+state.dot.png
