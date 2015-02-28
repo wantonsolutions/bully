@@ -612,9 +612,9 @@ size_t sendMessage(msgType messageType, unsigned int electionID, unsigned int no
 /**
  * Responds to the message with an ANSWER
  */
-void sendANSWER(struct msg *hostBuf, struct sockaddr *src_addr){
+void sendANSWER(struct msg *hostBuf, unsigned int nodeID){
     // Use current election ID.
-    sendMessage(ANSWER, hostBuf->electionID, src_addr, sizeof(struct sockaddr));
+    sendMessage(ANSWER, hostBuf->electionID, nodeID);
 }
 
 /**
@@ -625,8 +625,9 @@ void sendANSWER(struct msg *hostBuf, struct sockaddr *src_addr){
 void sendELECTs(unsigned int electionID){
     int i;
     for(i = 0; i < MAX_NODES; i++){
-        if(myGroup.members[i].nodeId > myID) {
-            sendMessage(ELECT, electionID,myGroup.members[i].nodeId);
+        unsigned int memberID = myGroup.members[i].nodeId;
+        if(memberID > myID) {
+            sendMessage(ELECT, electionID, memberID);
         }
     }
 }
@@ -635,15 +636,15 @@ void sendELECTs(unsigned int electionID){
  * Send AYA to the coordinator,
  */
 void sendAYA(){
-    sendMessage(AYA, myID, coordId);
+    sendMessage(AYA, myID, coordID);
 }
 
 /**
  * Send an IAA back to the sender.
  * We can extract the nodeID from the message
  */
-void sendIAA(struct msg *message, struct sockaddr *from){
-    sendMessage(AYA, message->electionID, from, sizeof(struct sockaddr));
+void sendIAA(struct msg *message, unsigned int nodeID){
+    sendMessage(AYA, message->electionID, nodeID);
 }
 
 
@@ -654,10 +655,9 @@ void sendCOORDs(){
     coordID = myID;
     int i;
     for(i = 0; i < MAX_NODES; i++){
-        if(myGroup.members[i].nodeId < myID) {
-            sendMessage(COORD, myElectionID,
-                    getGroupAddr(myGroup.members[i].nodeId),
-                    sizeof(struct sockaddr));
+        unsigned int memberID = myGroup.members[i].nodeId;
+        if(memberID < myID && memberID != 0) {
+            sendMessage(COORD, myElectionID, memberID);
         }
     }
 }
@@ -667,6 +667,7 @@ void sendCOORDs(){
 /********************************************************************/
 
 void handleMsg(msgType messageType, struct msg *message, struct sockaddr *src_addr){
+    unsigned int srcNodeID = get_in_port(src_addr);
     switch(messageType){
         case ELECT:
             /*
@@ -677,14 +678,14 @@ void handleMsg(msgType messageType, struct msg *message, struct sockaddr *src_ad
                 //Respond with Answer. Do not start a new election and do not switch states.
                 case STATE_ANSWERED:
                 case STATE_ELECTION:
-                    sendANSWER(message, src_addr);
+                    sendANSWER(message, srcNodeID);
                     //TODO Update timeout value.
                     break;
                 case STATE_INIT:
                 case STATE_NORMAL:
                 case STATE_AYA:
                     // Respond with ANSWER.
-                    sendANSWER(message, src_addr);
+                    sendANSWER(message, srcNodeID);
                     // Start Election for INIT, NORMAL and AYA.
                     sendELECTs(message->electionID);
                     state = STATE_ELECTION;
@@ -719,7 +720,7 @@ void handleMsg(msgType messageType, struct msg *message, struct sockaddr *src_ad
                 case STATE_ELECTION:
                 default:
                     myElectionID = myElectionID > message->electionID ? myElectionID : message->electionID;
-                    coordID = get_in_port(src_addr);
+                    coordID = srcNodeID;
                     state = STATE_NORMAL;
                     //TODO set timeout to AYATime
                     break;
@@ -735,7 +736,7 @@ void handleMsg(msgType messageType, struct msg *message, struct sockaddr *src_ad
                 case STATE_ELECTION:
                     // Node was coordinator before the election started.
                     if (coordID == myID){
-                        sendIAA(message, src_addr);
+                        sendIAA(message, srcNodeID);
                     }
                     break;
                 default:
@@ -771,9 +772,11 @@ void handleMsg(msgType messageType, struct msg *message, struct sockaddr *src_ad
                  * I timed out, but since I'm normal, it's really an AYATime.
                  */
                 case STATE_NORMAL:
-                    sendAYA();
-                    //TODO Set up new timeout!
-                    state = STATE_AYA;
+                    if (myID != coordID){
+                        sendAYA();
+                        //TODO Set up new timeout!
+                        state = STATE_AYA;
+                    }
                     break;
                 /**
                  *  //Expecting a message, but it didn't show up. Start an election.
@@ -813,16 +816,15 @@ int mainLoop(int fd){
     socklen_t addrlen = sizeof(struct sockaddr_storage);
     // msg in host format.
     struct msg hostBuf;
-    printf("About to loop.\n");
     while(1){
-        printf("LOOP: start.\n");
+        printf("LOOP: State: %d\n", state);
         retval = select(1, &rfds, NULL, NULL, &socketTimeout);
         struct msg msgBuf;
         if(retval == 0) {
             // We timed out for various reasons.
             // This covers normal timeouts and AYATime.
             messageType = TIMEOUT;
-            printf("We have a timeout.");
+            printf("We have a timeout.\n");
             // TODO Do we need to add it back to rfds?
         } else if (retval == -1) {
             perror("select()");
