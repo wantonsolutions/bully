@@ -32,7 +32,7 @@ FILE *logFile;
 unsigned int myID;
 unsigned int coordID;
 unsigned int state = STATE_INIT;
-unsigned int myElectionId = 0;
+unsigned int myElectionID = 0;
 /* /Global Node Variables */
 
 void usage(char * cmd) {
@@ -467,12 +467,12 @@ void printClock(FILE* f, struct clock* vclock){
  * it as a parameter
  */
 void htonMsg(struct msg *hostMsg, struct msg *networkMsg){
-    networkMsg->msgID = htons(hostMsg->msgID);
+    networkMsg->msgID = htonl(hostMsg->msgID);
     networkMsg->electionID = htonl(hostMsg->electionID);
     int i;
     for (i = 0; i < MAX_NODES; i++){
-        networkMsg->vectorClock[i].nodeId = htons(hostMsg->vectorClock[i].nodeId);
-        networkMsg->vectorClock[i].time = htons(hostMsg->vectorClock[i].time);
+        networkMsg->vectorClock[i].nodeId = htonl(hostMsg->vectorClock[i].nodeId);
+        networkMsg->vectorClock[i].time = htonl(hostMsg->vectorClock[i].time);
     }
 }
 
@@ -483,12 +483,12 @@ void htonMsg(struct msg *hostMsg, struct msg *networkMsg){
  * it as a parameter.
  */
 void ntohMsg(struct msg *networkMsg, struct msg *hostMsg){
-    hostMsg->msgID = ntohs(networkMsg->msgID);
+    hostMsg->msgID = ntohl(networkMsg->msgID);
     hostMsg->electionID = ntohl(networkMsg->electionID);
     int i;
     for (i = 0; i < MAX_NODES; i++){
-        hostMsg->vectorClock[i].nodeId = ntohs(networkMsg->vectorClock[i].nodeId);
-        hostMsg->vectorClock[i].time = ntohs(networkMsg->vectorClock[i].time);
+        hostMsg->vectorClock[i].nodeId = ntohl(networkMsg->vectorClock[i].nodeId);
+        hostMsg->vectorClock[i].time = ntohl(networkMsg->vectorClock[i].time);
     }
 }
 
@@ -512,11 +512,11 @@ int generateAYA(){
 void incrementClock(){
 	int i;
 	for(i=0;i<MAX_NODES;i++){
-		if(myClock[i].nodeId == port){
+		if(myClock[i].nodeId == myID){
 			myClock[i].time++;
 			return;
 		}
-	}
+}
 }
 
 int sendFailed(void){
@@ -608,19 +608,20 @@ size_t sendMessage(msgType messageType, unsigned int electionID, struct sockaddr
  * Responds to the message with an ANSWER
  */
 void sendANSWER(struct msg *hostBuf, struct sockaddr *src_addr){
-    //TODO Which election Id do we use?
-    sendMessage(ANSWER, myElectionId, src_addr, sizeof(struct sockaddr));
+    // Use current election ID.
+    sendMessage(ANSWER, hostBuf->electionID, src_addr, sizeof(struct sockaddr));
 }
 
 /**
  * Sends an ELECT message to all nodes above you.
+ * We forward the ID if we receive an ELECT, and increment it if we didn't.
+ * This is done in the message handler.
  */
-void sendELECTs(){
-    //TODO Update Election ID?
+void sendELECTs(unsigned int electionID){
     int i;
     for(i = 0; i < MAX_NODES; i++){
         if(myGroup.members[i].nodeId > myID) {
-            sendMessage(ELECT, myElectionId, 
+            sendMessage(ELECT, electionID,
                     getGroupAdderInfo(myGroup.members[i].nodeId)->ai_addr,
                     sizeof(struct sockaddr));
         }
@@ -652,7 +653,7 @@ void sendCOORDs(){
     int i;
     for(i = 0; i < MAX_NODES; i++){
         if(myGroup.members[i].nodeId < myID) {
-            sendMessage(COORD, myElectionId, 
+            sendMessage(COORD, myElectionID,
                     getGroupAdderInfo(myGroup.members[i].nodeId)->ai_addr,
                     sizeof(struct sockaddr));
         }
@@ -683,7 +684,7 @@ void handleMsg(msgType messageType, struct msg *message, struct sockaddr *src_ad
                     // Respond with ANSWER.
                     sendANSWER(message, src_addr);
                     // Start Election for INIT, NORMAL and AYA.
-                    sendELECTs();
+                    sendELECTs(message->electionID);
                     state = STATE_ELECTION;
                     break;
                 default:
@@ -715,8 +716,8 @@ void handleMsg(msgType messageType, struct msg *message, struct sockaddr *src_ad
                 case STATE_ANSWERED:
                 case STATE_ELECTION:
                 default:
-                    //TODO Update election ID.
-                    //TODO Update coordinator ID.
+                    myElectionID = myElectionID > message->electionID ? myElectionID : message->electionID;
+                    coordID = get_in_port(src_addr);
                     state = STATE_NORMAL;
                     //TODO set timeout to AYATime
                     break;
@@ -778,7 +779,8 @@ void handleMsg(msgType messageType, struct msg *message, struct sockaddr *src_ad
                 case STATE_INIT:
                 case STATE_AYA:
                 case STATE_ANSWERED:
-                    sendELECTs();
+                    myElectionID++;
+                    sendELECTs(myElectionID);
                     //TODO Set up new timeout.
                     state = STATE_ELECTION;
                     break;
@@ -809,19 +811,18 @@ int mainLoop(int fd){
     socklen_t addrlen = sizeof(struct sockaddr_storage);
     // msg in host format.
     struct msg hostBuf;
-
-    // Loop without init state.
+    printf("About to loop.\n");
     while(1){
+        printf("LOOP: start.\n");
         retval = select(1, &rfds, NULL, NULL, &socketTimeout);
         struct msg msgBuf;
         if(retval == 0) {
             // We timed out for various reasons.
             // This covers normal timeouts and AYATime.
             messageType = TIMEOUT;
+            printf("We have a timeout.");
             // TODO Do we need to add it back to rfds?
         } else if (retval == -1) {
-		
-            //TODO Handle error.
             perror("select()");
             FD_ZERO(&rfds);
             FD_SET(fd, &rfds);
@@ -837,6 +838,9 @@ int mainLoop(int fd){
         // We know the message length, so we don't need to process it.
         handleMsg(messageType, &hostBuf, (struct sockaddr *) &src_addr);
         // Handle message for current state and transition if needed.
+        // TODO Properly do timeouts.
+        socketTimeout.tv_sec = timeoutValue;
+        socketTimeout.tv_usec = 0;
     }
 }
 
@@ -861,7 +865,6 @@ int main(int argc, char ** argv) {
 		return -1;
 	}
 
-
 	// If you want to produce a repeatable sequence of "random" numbers
 	// replace the call time() with an integer.
 	srandom(time());
@@ -871,7 +874,7 @@ int main(int argc, char ** argv) {
 		int sc = generateAYA();
 		printf("Random number %d is: %d\n", i, sc);
 	}
-	mainLoop(soc);
+    mainLoop(soc);
 	return 0;
 }
 
