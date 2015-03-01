@@ -31,17 +31,17 @@ file. If working in pairs both of you must do this.
 
 
 STUDENT  1
-Name :
-St. No:
-Unix Id :
-Email:
+Name : Stewart Grant
+St. No: 23539133
+Unix Id : v9c9
+Email: v9c9@ugrad.cs.ubc.ca
 
 
 STUDENT  2
-Name :
-St. No:
-Unix Id :
-Email:
+Name : Kenneth Shen
+St. No: 25347113
+Unix Id : k8a9
+Email: k8a9@ugrad.cs.ubc.ca
 
 
 ACKNOWLEDGMENTS :
