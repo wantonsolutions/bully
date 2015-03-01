@@ -5,6 +5,31 @@
 #define STATE_ELECTION 3
 #define STATE_ANSWERED 4
 
+
+unsigned int myID;
+unsigned int coordID;
+
+char * stateStr(int state){
+    switch(state){
+        case STATE_INIT:
+            return "INIT";
+        case STATE_NORMAL:
+            if (myID == coordID){
+                return "COORDINATOR";
+            } else {
+                return "NORMAL";
+            }
+        case STATE_AYA:
+            return "AYA_WAIT";
+        case STATE_ELECTION:
+            return "ELECTION";
+        case STATE_ANSWERED:
+            return "ANSWERED";
+        default:
+            return "INVALID";
+    }
+}
+
 int mergeClock(struct clock* vclock);
 
 void usage(char * cmd);

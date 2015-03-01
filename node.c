@@ -29,6 +29,7 @@ struct clock myClock[MAX_NODES];
 unsigned int *ourTime;
 
 struct timeval socketTimeout;
+struct timeval *timeoutPtr;
 FILE *logFile;
 unsigned int myID;
 unsigned int coordID;
@@ -105,19 +106,36 @@ void incrementClock(){
 /**************************************************************************/
 /*			 Group						  */
 /**************************************************************************/
+
+
+/**
+ *  Returns the index of the node in the group list 
+ *  or -1 if it is not in the list.
+ *
+ */
+int getGroupIndex(unsigned short nodeId){
+    int i;
+    for(i = 0; i < MAX_NODES; i++){
+        if (myGroup.members[i].nodeId == nodeId){
+            return i;
+        }
+    }
+    return -1;
+}
+
 /* returns the addrInfo of a group member 
  * if the group member is not in the group returns NULL
  */
-struct sockaddr * getGroupAddr(unsigned int nodeId){
-	int i;
-	for(i=0;i<MAX_NODES;i++){
-		if(myGroup.members[i].nodeId == nodeId){
-			return &myGroup.members[i].nodeAddr;
-		}
-	}
-	fprintf(stderr,"Error, node N%u not in group",nodeId);
+struct sockaddr * getGroupAddr(unsigned short nodeId){
+    int index;
+    if(index = getGroupIndex(nodeId) != -1){
+        return &myGroup.members[index].nodeAddr;
+    }
+
+	fprintf(stderr,"Error, node N%hu not in group\n",nodeId);
 	return NULL;
 }
+
 
 /**************************************************************************/
 /*			 /Group						  */
@@ -388,6 +406,33 @@ int init(int argc, char **argv) {
 /********************************************************************/
 /*			LOGGING					   */
 /********************************************************************/
+
+
+char * msgTypeStr(msgType msg){
+    switch(msg){
+        case ELECT:
+            return "ELECT";
+        case ANSWER:
+            return "ANSWER";
+        case COORD:
+            return "COORD";
+        case AYA:
+            return "AYA";
+        case IAA:
+            return "IAA";
+        case TIMEOUT:
+            // If state is normal, the timeout is definitely AYATime 
+            // since we don't timeout on anything else.
+            if (state == STATE_NORMAL) {
+                return "AYATIME";
+            } else {
+                return "TIMEOUT";
+            }
+        default:
+            return "INVALID";
+    }
+}
+
 int logInit( char *logFileName ){
 	if(logFileName[0] == '-' && strlen(logFileName) == 1){
         logFile = stdout;
@@ -404,16 +449,14 @@ int logInit( char *logFileName ){
 }
 
 int logSend(struct clock* vclock, struct msg* message, unsigned int receipiant){
-	fprintf(logFile,"Send");
-	printMessageType(logFile,message->msgID);
+	fprintf(logFile,"Send %s ", msgTypeStr(message->msgID));
 	fprintf(logFile,"to N%u E:%u\n",receipiant,message->electionID);
 	printClock(logFile,(struct clock *)myClock);
     fflush(logFile);
 }
 
 int logReceive(struct clock* vclock, struct msg * message, unsigned int sender){
-	fprintf(logFile,"Receive");
-	printMessageType(logFile,message->msgID);
+	fprintf(logFile,"Receive %s ", msgTypeStr(message->msgID));
 	fprintf(logFile,"from N%u E:%u\n",sender,message->electionID);
 	printClock(logFile,(struct clock *)myClock);
     fflush(logFile);
@@ -425,7 +468,7 @@ int logReceive(struct clock* vclock, struct msg * message, unsigned int sender){
 int logTimeout( void ){
 	switch(state){
 		case STATE_INIT:
-			fprintf(logFile,"INIT TIMEOUT, something is bery wrong\n");
+			fprintf(logFile,"INIT TIMEOUT -> Send ELECTs\n");
 			break;
 		case STATE_NORMAL:
 			fprintf(logFile,"TIMEOUT on AYA -> Send to Coord%d\n",coordID);
@@ -444,36 +487,6 @@ int logTimeout( void ){
 	fflush(logFile);
 }
 
-void printMessageType(FILE *f, msgType msg){
-	switch(msg){
-		case ELECT:
-			fprintf(f," ELECT ");
-			break;
-		case ANSWER:
-			fprintf(f," ANSWER ");
-			break;
-		case COORD:
-			fprintf(f," COORD ");
-			break;
-		case AYA:
-			fprintf(f," AYA ");
-			break;
-		case IAA:
-			fprintf(f," IAA ");
-			break;
-        case TIMEOUT:
-            // If state is normal, the timeout is definitely AYATime 
-            // since we don't timeout on anything else.
-            if (state == STATE_NORMAL) {
-                fprintf(f," AYATIME ");
-            } else {
-                fprintf(f," TIMEOUT ");
-            }
-            break;
-		default:
-			fprintf(stderr,"ERROR: Unknown Message type\n");
-	}
-}
 
 void printMessage(struct msg * message){
 	fprintf(stdout,"Msg TYPE:\t%d\nMsg ElId:\t%d\n",message->msgID,message->electionID);
@@ -600,7 +613,22 @@ void constructMessage(msgType messageType, unsigned int electionID, struct msg* 
     copyClock(buf);
 }
 
+/**
+ *  
+ */
+void updateTimeout(long newTimeout){
+    if (newTimeout == -1){
+        //Block indefinitely.
+        timeoutPtr = NULL;
+    } else if (newTimeout == 0) {
+        //Do nothing. Timeout gets updated on Linux.
+    } else {
+        timeoutPtr = &socketTimeout;
+        socketTimeout.tv_sec = newTimeout;
+        socketTimeout.tv_usec = 0;
+    }
 
+}
 /********************************************************************/
 /*			/HELPERS		     		    */
 /********************************************************************/
@@ -618,11 +646,11 @@ ssize_t recvMessage(struct msg * buf, struct sockaddr *from, socklen_t *fromlen)
         return -1;
     }
     incrementClock();
-	logReceive(myClock,buf,(unsigned int)get_in_port(from));
+	logReceive(myClock,buf,get_in_port(from));
 	return ret;
 }
 
-size_t sendMessage(msgType messageType, unsigned int electionID, unsigned int nodeId){
+size_t sendMessage(msgType messageType, unsigned int electionID, unsigned short nodeId){
 	struct msg buf;
 	struct sockaddr nodeAddr;
 	//TODO catch null exception
@@ -683,7 +711,7 @@ void sendAYA(){
  * We can extract the nodeID from the message
  */
 void sendIAA(struct msg *message, unsigned int nodeID){
-    sendMessage(AYA, message->electionID, nodeID);
+    sendMessage(IAA, message->electionID, nodeID);
 }
 
 
@@ -705,8 +733,17 @@ void sendCOORDs(){
 /*			/MESSAGE HANDLER HELPERS		     		    */
 /********************************************************************/
 
-void handleMsg(msgType messageType, struct msg *message, struct sockaddr *src_addr){
-    unsigned int srcNodeID = get_in_port(src_addr);
+/**
+ * Handles messages arriving and returns the timeout for the next read.
+ */
+long handleMsg(msgType messageType, struct msg *message, struct sockaddr *src_addr){
+    unsigned short srcNodeID = get_in_port(src_addr);
+    printf("State: %s\nHandling message %s from %hu\n", stateStr(state), msgTypeStr(messageType), srcNodeID);
+    /** New timeout is 0. If it is -1, we set timeout to -1.
+    *  If it is 0, we use our previous timeout.
+    *  If it is anything else, we use that value.
+    */
+    long newTimeout = 0;
     switch(messageType){
         case ELECT:
             /*
@@ -718,7 +755,8 @@ void handleMsg(msgType messageType, struct msg *message, struct sockaddr *src_ad
                 case STATE_ANSWERED:
                 case STATE_ELECTION:
                     sendANSWER(message, srcNodeID);
-                    //TODO Update timeout value.
+                    // We keep our timeout since we're already waiting for a response.
+                    newTimeout = 0;
                     break;
                 case STATE_INIT:
                 case STATE_NORMAL:
@@ -728,6 +766,8 @@ void handleMsg(msgType messageType, struct msg *message, struct sockaddr *src_ad
                     // Start Election for INIT, NORMAL and AYA.
                     sendELECTs(message->electionID);
                     state = STATE_ELECTION;
+                    // Waiting for an ELECT.
+                    newTimeout = timeoutValue;
                     break;
                 default:
                     break;
@@ -740,7 +780,7 @@ void handleMsg(msgType messageType, struct msg *message, struct sockaddr *src_ad
             switch (state) {
                 case STATE_ELECTION:
                     // Transition to state_ANSWERED 
-                    // TODO Set new timeout.
+                    newTimeout = (MAX_NODES + 1) * timeoutValue;
                     state = STATE_ANSWERED;
                     break;
                 default:
@@ -760,9 +800,9 @@ void handleMsg(msgType messageType, struct msg *message, struct sockaddr *src_ad
                 default:
                     myElectionID = myElectionID > message->electionID ? myElectionID : message->electionID;
                     coordID = srcNodeID;
-                    printf("Coordinator is %d", srcNodeID);
+                    printf("Coordinator is %hu\n", srcNodeID);
                     state = STATE_NORMAL;
-                    //TODO set timeout to AYATime
+                    newTimeout = generateAYA();
                     break;
             }
             break;
@@ -777,6 +817,8 @@ void handleMsg(msgType messageType, struct msg *message, struct sockaddr *src_ad
                     // Node was coordinator before the election started.
                     if (coordID == myID){
                         sendIAA(message, srcNodeID);
+                        // Keep same timeout.
+                        newTimeout = 0;
                     }
                     break;
                 default:
@@ -789,7 +831,7 @@ void handleMsg(msgType messageType, struct msg *message, struct sockaddr *src_ad
              */
             switch (state) {
                 case STATE_AYA:
-                    //TODO set new Timeout
+                    newTimeout = generateAYA();
                     state = STATE_NORMAL;
                     break;
                 default:
@@ -805,7 +847,7 @@ void handleMsg(msgType messageType, struct msg *message, struct sockaddr *src_ad
                 case STATE_ELECTION:
                     coordID = myID;
                     sendCOORDs();
-                    // TODO Set up new timeout. -1.
+                    newTimeout = -1;
                     state = STATE_NORMAL;
                     break;
                 /**
@@ -814,20 +856,20 @@ void handleMsg(msgType messageType, struct msg *message, struct sockaddr *src_ad
                 case STATE_NORMAL:
                     if (myID != coordID){
                         sendAYA();
-                        //TODO Set up new timeout!
+                        newTimeout = timeoutValue;
                         state = STATE_AYA;
                     }
                     break;
                 /**
-                 *  //Expecting a message, but it didn't show up. Start an election.
+                 *  Expecting a message, but it didn't show up. Start an election.
                  */
                 case STATE_INIT:
                 case STATE_AYA:
                 case STATE_ANSWERED:
                     myElectionID++;
                     sendELECTs(myElectionID);
-                    //TODO Set up new timeout.
                     state = STATE_ELECTION;
+                    newTimeout = timeoutValue;
                     break;
                 default:
                     break;
@@ -836,6 +878,7 @@ void handleMsg(msgType messageType, struct msg *message, struct sockaddr *src_ad
         default:
             break;
     }
+    return newTimeout;
 }
 
 /**
@@ -846,30 +889,30 @@ int mainLoop(int fd){
     int retval;
     msgType messageType;
     fd_set rfds;
-    FD_SET(fd, &rfds);
 
     // Set socket timeout.
-    socketTimeout.tv_sec = timeoutValue;
-    socketTimeout.tv_usec = 0;
+    long newTimeout = timeoutValue;
 
     struct sockaddr_storage src_addr;
     socklen_t addrlen = sizeof(struct sockaddr_storage);
     // msg in host format.
     while(1){
-        printf("LOOP: State: %d\n", state);
-        retval = select(fd + 1, &rfds, NULL, NULL, &socketTimeout);
+        printf("LOOP: State: %s\n", stateStr(state));
+        if(!FD_ISSET(fd,&rfds)){
+            FD_SET(fd, &rfds);
+        }
+        // Set up the timeout structure.
+        updateTimeout(newTimeout);
+        retval = select(fd + 1, &rfds, NULL, NULL, timeoutPtr);
         struct msg hostBuf;
         if(retval == 0) {
             // We timed out for various reasons.
             // This covers normal timeouts and AYATime.
             messageType = TIMEOUT;
-	    logTimeout();
+            logTimeout();
             // Removed from set on timeout, so add it back.
-            FD_SET(fd, &rfds);
         } else if (retval == -1) {
             perror("select()");
-            FD_ZERO(&rfds);
-            FD_SET(fd, &rfds);
             continue;
         } else {
             // Receive message and fill src_addr struct.
@@ -881,11 +924,8 @@ int mainLoop(int fd){
             messageType = hostBuf.msgID;
         }
         // We know the message length, so we don't need to process it.
-        handleMsg(messageType, &hostBuf, (struct sockaddr *) &src_addr);
+        newTimeout = handleMsg(messageType, &hostBuf, (struct sockaddr *) &src_addr);
         // Handle message for current state and transition if needed.
-        // TODO Properly do timeouts.
-        socketTimeout.tv_sec = timeoutValue;
-        socketTimeout.tv_usec = 0;
     }
 }
 
