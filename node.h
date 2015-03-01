@@ -39,7 +39,8 @@ int initMember(char * rPort, char * rAddress, int groupIndex);
 int listeningSocket(char* lPort);
 int init(int argc, char **argv);
 
-
+void socktostr(struct sockaddr_storage *sa, char* str);
+in_port_t get_in_port(struct sockaddr *sa);
 int logInit( char *logFileName );
 int logSend(struct clock* vclock, struct msg* message, unsigned int receipiant);
 int logReceive(struct clock* vclock, struct msg * message, unsigned int sender);

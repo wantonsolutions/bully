@@ -3,11 +3,12 @@
 #include <unistd.h>
 #include <errno.h>
 #include <string.h>
+#include <sys/time.h>
 #include <sys/types.h>
 #include <sys/socket.h>
 #include <netinet/in.h>
 #include <netinet/udp.h>
-//include <arpa/inet.h>
+#include <arpa/inet.h>
 #include <netdb.h>
 
 #include "msg.h"
@@ -28,6 +29,7 @@ struct msg myMsg;	//message used for sending to each node
 struct clock myClock[MAX_NODES];
 unsigned int *ourTime;
 
+struct timeval expectedEndtime;
 struct timeval socketTimeout;
 struct timeval *timeoutPtr;
 FILE *logFile;
@@ -127,9 +129,9 @@ int getGroupIndex(unsigned short nodeId){
  * if the group member is not in the group returns NULL
  */
 struct sockaddr_storage * getGroupAddr(unsigned short nodeId){
-    int index;
-    if(index = getGroupIndex(nodeId) != -1){
-        return &myGroup.members[index].nodeAddr;
+    int index = getGroupIndex(nodeId);
+    if(index != -1){
+        return &(myGroup.members[index].nodeAddr);
     }
 
 	fprintf(stderr,"Error, node N%hu not in group\n",nodeId);
@@ -248,7 +250,7 @@ int initMember(char * rPort, char * rAddress, int groupIndex){
 	int numbytes;
 	int nodeId;
 
-	printf("Address: %s\nPort:%s\n",rAddress,rPort);
+	printf("Trying to create index: %d\nAddress: %s\nPort:%s\n\n",groupIndex, rAddress,rPort);
 	memset(&hints, 0, sizeof hints);
 	hints.ai_family = AF_UNSPEC;
 	hints.ai_socktype = SOCK_DGRAM;
@@ -278,9 +280,14 @@ int initMember(char * rPort, char * rAddress, int groupIndex){
 	}
 
 	//set member variables
-	myGroup.members[groupIndex].nodeId = atoi(rPort);
-	
-    memcpy(&(myGroup.members[groupIndex].nodeAddr), &(p->ai_addr), sizeof(p->ai_addr));
+    struct member *node = &(myGroup.members[groupIndex]);
+    struct sockaddr_storage *sockaddr = &node->nodeAddr;
+	node->nodeId = atoi(rPort);
+    
+    memcpy(sockaddr, p->ai_addr, p->ai_addrlen);
+    char sockStr[100];
+    socktostr(sockaddr, sockStr);
+    printf("member[%d] is %s \n", groupIndex, sockStr);
 	return 0;
 }
 
@@ -430,7 +437,7 @@ char * msgTypeStr(msgType msg){
 int logInit( char *logFileName ){
 	if(logFileName[0] == '-' && strlen(logFileName) == 1){
         logFile = stdout;
-        printf("Log file is stdout.");
+        printf("Log file is stdout.\n");
     } else {
         logFile = fopen(logFileName,"w+");
     }
@@ -548,6 +555,19 @@ void ntohMsg(struct msg *networkMsg, struct msg *hostMsg){
     }
 }
 
+void socktostr(struct sockaddr_storage* sock, char* dst){
+    char ipStr[INET6_ADDRSTRLEN];
+    void* ipPtr;
+    if (sock->ss_family == AF_INET){
+        ipPtr = &((struct sockaddr_in*) sock)->sin_addr;
+    } else {
+        ipPtr = &((struct sockaddr_in6*) sock)->sin6_addr;
+    }
+    inet_ntop(sock->ss_family, ipPtr, ipStr, INET6_ADDRSTRLEN);
+    int port = get_in_port((struct sockaddr*) sock);
+    sprintf(dst, "%s:%d", ipStr, port);
+}
+
 /**
  * Generates the next AYATime interval.
  *
@@ -608,6 +628,20 @@ void constructMessage(msgType messageType, unsigned int electionID, struct msg* 
 }
 
 /**
+ *  Set timeout.
+ */
+void setTimeout(long newTimeout){
+
+    timeoutPtr = &socketTimeout;
+    socketTimeout.tv_sec = newTimeout;
+    socketTimeout.tv_usec = 0;
+    // Mark the expected timeout end.
+    struct timeval startTime;
+    gettimeofday(&startTime, NULL);
+    timeradd(&startTime, timeoutPtr, &expectedEndtime);
+}
+
+/**
  *  
  */
 void updateTimeout(long newTimeout){
@@ -615,13 +649,18 @@ void updateTimeout(long newTimeout){
         //Block indefinitely.
         timeoutPtr = NULL;
     } else if (newTimeout == 0) {
-        //Do nothing. Timeout gets updated on Linux.
+        // Keep the same timeout. Do time math.
+        struct timeval midTime;
+        gettimeofday(&midTime, NULL);
+        timersub(&expectedEndtime, &midTime, &socketTimeout);
     } else {
-        timeoutPtr = &socketTimeout;
-        socketTimeout.tv_sec = newTimeout;
-        socketTimeout.tv_usec = 0;
+        setTimeout(newTimeout);
     }
-
+    if (timeoutPtr == NULL){
+        printf("No timeout for select.\n");
+    } else {
+        printf("Timeout around %d\n", socketTimeout.tv_sec);
+    }
 }
 /********************************************************************/
 /*			/HELPERS		     		    */
@@ -637,10 +676,12 @@ ssize_t recvMessage(struct msg * buf, struct sockaddr *from, socklen_t *fromlen)
 	ret = recvfrom(soc, (void *) &netMsg, sizeof (struct msg), 0, from, fromlen);
 	ntohMsg(&netMsg,buf);
 	if (mergeClock(buf->vectorClock) == -1){
+        printf("Clock merge failed.\n");
         return -1;
     }
     incrementClock();
-	logReceive(myClock,buf,get_in_port(from));
+    unsigned short port = get_in_port(from);
+	logReceive(myClock,buf,port);
 	return ret;
 }
 
@@ -648,16 +689,26 @@ size_t sendMessage(msgType messageType, unsigned int electionID, unsigned short 
 	struct msg buf;
 	struct sockaddr_storage* nodeAddr;
 	//TODO catch null exception
-        nodeAddr = getGroupAddr(nodeId);
+    nodeAddr = getGroupAddr(nodeId);
+    if (nodeAddr == NULL){
+        printf("Failed to find N%hu\n", nodeId);
+        return -1;
+    }
 	incrementClock();
 	constructMessage(messageType, electionID, &buf);
-	logSend(myClock,&buf,nodeId);
+    unsigned int port = get_in_port((struct sockaddr *) nodeAddr);
+	logSend(myClock,&buf,port);
 	if(sendFailed()){
+        printf("Simulated send Failure.\n");
 		return sizeof (struct msg);
 	} else {	
 		struct msg networkMsg;
 		htonMsg(&buf, &networkMsg);
-		return sendto(soc, (void *)&networkMsg, sizeof(networkMsg), 0, (struct sockaddr *) nodeAddr, sizeof(nodeAddr));
+		int ret = sendto(soc, (void *)&networkMsg, sizeof(networkMsg), 0, (struct sockaddr *) nodeAddr, sizeof(struct sockaddr_storage));
+        if (ret == -1){
+            perror("sendto()");
+            printf("\n");
+        }
 	}
 }
 
@@ -718,6 +769,7 @@ void sendCOORDs(){
     for(i = 0; i < MAX_NODES; i++){
         unsigned int memberID = myGroup.members[i].nodeId;
         if(memberID < myID && memberID != 0) {
+            printf("Starting function to send COORD to %d\n", memberID);
             sendMessage(COORD, myElectionID, memberID);
         }
     }
@@ -898,10 +950,13 @@ int mainLoop(int fd){
         struct sockaddr_storage src_addr;
         socklen_t addrlen = sizeof(struct sockaddr_storage);
 
+        // If it isn't in the set, add it back.
         if(!FD_ISSET(fd,&rfds)){
             FD_SET(fd, &rfds);
         }
         // Set up the timeout structure.
+        //int timeoutScale = state == STATE_ANSWERED ? (MAX_NODES + 1) : 1;
+        //updateTimeout(timeoutScale * timeoutValue);
         updateTimeout(newTimeout);
         retval = select(fd + 1, &rfds, NULL, NULL, timeoutPtr);
         struct msg hostBuf;
@@ -909,6 +964,7 @@ int mainLoop(int fd){
             // We timed out for various reasons.
             // This covers normal timeouts and AYATime.
             messageType = TIMEOUT;
+            incrementClock();
             logTimeout();
             // Removed from set on timeout, so add it back.
         } else if (retval == -1) {
@@ -919,6 +975,9 @@ int mainLoop(int fd){
             retval = recvMessage(&hostBuf, (struct sockaddr *) &src_addr, &addrlen);
             if (retval == -1){
                 printf("Invalid message received.\n");
+                // Pretend the message never happened.
+                newTimeout = 0;
+                continue;
             }
             // Set msg_type.
             messageType = hostBuf.msgID;
@@ -959,6 +1018,16 @@ int main(int argc, char ** argv) {
 		int sc = generateAYA();
 		printf("Random number %d is: %d\n", i, sc);
 	}
+    
+    for(i = 0; i < MAX_NODES; i++){
+        int node = myGroup.members[i].nodeId;
+        if(node){
+            struct sockaddr_storage * addr = &(myGroup.members[i].nodeAddr);
+            char addrStr[100];
+            socktostr(addr, addrStr);
+            printf("Member: Node %d at %s\n", node, addrStr);
+        }
+    }
 	/*
 	//testing
 	struct msg message;
