@@ -1,3 +1,9 @@
+Interoperability
 
-This file is to contain your interoperability report.
+Case 1: James Funk (z1t7)
 
+We allowed our nodes to join the group slowly, one at a time and they worked together to elect a leader, everything ran smoothly for about  2 min with a low level failed messages. We added another node to the group at that point and the resulting caused our system to crash. We continuously tried to find the souce of the error, however it is rather inconsistant in how it shows up. All in all we are able to run an election some of the time.
+
+Case 2: Walter (g0e9)
+
+Similar to the case above we were able to run elections most of the time, however every once in a while this system crashed due to the election.
