@@ -26,6 +26,7 @@ struct group   myGroup;
 int soc;		//listening socket discriptor
 struct msg myMsg;	//message used for sending to each node
 struct clock myClock[MAX_NODES];
+unsigned int *ourTime;
 
 struct timeval socketTimeout;
 FILE *logFile;
@@ -47,13 +48,11 @@ void usage(char * cmd) {
 int clockMergeError(struct clock* vclock){
 	int i, j;
 	//check for remote node having a higher value then the local clock
-	for(i=0;i<MAX_NODES;i++){
-		for(j=0;j<MAX_NODES;j++){
-			if(myClock[i].nodeId == port && vclock[i].nodeId == port){
-				if(myClock[i].time < vclock[j].time){
-					fprintf(stderr,"Error: remote node has clock value greater than local time\n");
-					return -1;
-				}
+	for(j=0;j<MAX_NODES;j++){
+		if(vclock[j].nodeId == port){
+			if(*ourTime < vclock[j].time){
+				fprintf(stderr,"Error: remote node has clock value greater than local time\n");
+				return -1;
 			}
 		}
 	}
@@ -133,6 +132,7 @@ void initClock( void ){
 		if(i<myGroup.size){
 			//if the entry is for this node
 			if(myGroup.members[i].nodeId == port){
+				ourTime = &myClock[i].time;
 				myClock[i].nodeId = port;
 				myClock[i].time = 1;
 			} else {
