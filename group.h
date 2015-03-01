@@ -10,7 +10,7 @@
 
 struct member{
 	unsigned int nodeId;
-	struct sockaddr nodeAddr;
+	struct sockaddr_storage nodeAddr;
 };
 
 struct group {

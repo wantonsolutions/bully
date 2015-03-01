@@ -126,7 +126,7 @@ int getGroupIndex(unsigned short nodeId){
 /* returns the addrInfo of a group member 
  * if the group member is not in the group returns NULL
  */
-struct sockaddr * getGroupAddr(unsigned short nodeId){
+struct sockaddr_storage * getGroupAddr(unsigned short nodeId){
     int index;
     if(index = getGroupIndex(nodeId) != -1){
         return &myGroup.members[index].nodeAddr;
@@ -280,13 +280,7 @@ int initMember(char * rPort, char * rAddress, int groupIndex){
 	//set member variables
 	myGroup.members[groupIndex].nodeId = atoi(rPort);
 	
-	//TODO copy sock addr from p to the node identifier
-	myGroup.members[groupIndex].nodeAddr.sa_family = p->ai_addr->sa_family;
-	int i;
-	//14 is the length of the protocol address
-	for(i=0;i<14;i++){
-		myGroup.members[groupIndex].nodeAddr.sa_data[i] = p->ai_addr->sa_data[i];
-	}
+    memcpy(&(myGroup.members[groupIndex].nodeAddr), &(p->ai_addr), sizeof(p->ai_addr));
 	return 0;
 }
 
@@ -652,9 +646,9 @@ ssize_t recvMessage(struct msg * buf, struct sockaddr *from, socklen_t *fromlen)
 
 size_t sendMessage(msgType messageType, unsigned int electionID, unsigned short nodeId){
 	struct msg buf;
-	struct sockaddr nodeAddr;
+	struct sockaddr_storage* nodeAddr;
 	//TODO catch null exception
-        nodeAddr = *getGroupAddr(nodeId);
+        nodeAddr = getGroupAddr(nodeId);
 	incrementClock();
 	constructMessage(messageType, electionID, &buf);
 	logSend(myClock,&buf,nodeId);
@@ -663,7 +657,7 @@ size_t sendMessage(msgType messageType, unsigned int electionID, unsigned short 
 	} else {	
 		struct msg networkMsg;
 		htonMsg(&buf, &networkMsg);
-		return sendto(soc, (void *)&networkMsg, sizeof(networkMsg), 0, &nodeAddr, sizeof nodeAddr);
+		return sendto(soc, (void *)&networkMsg, sizeof(networkMsg), 0, (struct sockaddr *) nodeAddr, sizeof(nodeAddr));
 	}
 }
 
@@ -737,8 +731,12 @@ void sendCOORDs(){
  * Handles messages arriving and returns the timeout for the next read.
  */
 long handleMsg(msgType messageType, struct msg *message, struct sockaddr *src_addr){
-    unsigned short srcNodeID = get_in_port(src_addr);
-    printf("State: %s\nHandling message %s from %hu\n", stateStr(state), msgTypeStr(messageType), srcNodeID);
+    in_port_t srcNodeID = get_in_port(src_addr);
+    if (messageType != TIMEOUT){
+        printf("State: %s\nHandling message %s from %hu\n", stateStr(state), msgTypeStr(messageType), srcNodeID);
+    } else {
+        printf("State: %s \nEvent: %s\n", stateStr(state), msgTypeStr(messageType));
+    }
     /** New timeout is 0. If it is -1, we set timeout to -1.
     *  If it is 0, we use our previous timeout.
     *  If it is anything else, we use that value.
@@ -893,11 +891,13 @@ int mainLoop(int fd){
     // Set socket timeout.
     long newTimeout = timeoutValue;
 
-    struct sockaddr_storage src_addr;
-    socklen_t addrlen = sizeof(struct sockaddr_storage);
     // msg in host format.
     while(1){
         printf("LOOP: State: %s\n", stateStr(state));
+
+        struct sockaddr_storage src_addr;
+        socklen_t addrlen = sizeof(struct sockaddr_storage);
+
         if(!FD_ISSET(fd,&rfds)){
             FD_SET(fd, &rfds);
         }
