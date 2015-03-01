@@ -419,6 +419,31 @@ int logReceive(struct clock* vclock, struct msg * message, unsigned int sender){
     fflush(logFile);
 }
 
+/*
+ * log Timeout prints a log based on the state of the system when the timeout occured. It takes not parameters as the state is a global variable
+ */
+int logTimeout( void ){
+	switch(state){
+		case STATE_INIT:
+			fprintf(logFile,"INIT TIMEOUT, something is bery wrong\n");
+			break;
+		case STATE_NORMAL:
+			fprintf(logFile,"TIMEOUT on AYA -> Send to Coord%d\n",coordID);
+			break;
+		case STATE_AYA:
+			fprintf(logFile,"TIMEOUT on IAA -> Calling Election\n");
+			break;
+		case STATE_ELECTION:
+			fprintf(logFile,"TIMEOUT on ANSWER -> I am the new coordinator\n");
+			break;
+		case STATE_ANSWERED:
+			fprintf(logFile,"TIMEOUT on COORD -> calling a new election\n");
+			break;
+	}
+	printClock(logFile,(struct clock *)myClock);
+	fflush(logFile);
+}
+
 void printMessageType(FILE *f, msgType msg){
 	switch(msg){
 		case ELECT:
@@ -838,7 +863,7 @@ int mainLoop(int fd){
             // We timed out for various reasons.
             // This covers normal timeouts and AYATime.
             messageType = TIMEOUT;
-            printf("We have a timeout.\n");
+	    logTimeout();
             // Removed from set on timeout, so add it back.
             FD_SET(fd, &rfds);
         } else if (retval == -1) {
@@ -905,6 +930,7 @@ int main(int argc, char ** argv) {
 	}
 
 	//logging tests
+	
 	incrementClock();
 	mergeClock((struct clock *)message.vectorClock);
 	logReceive((struct clock *)myClock,&message, 8889);
