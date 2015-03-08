@@ -1,5 +1,4 @@
-
-Total before late penalty [/100]
+Total before late penalty: [/100]
 
 
 [/25] * Bully Algorithm 
