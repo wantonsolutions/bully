@@ -1,24 +1,25 @@
-Total before late penalty: [/100]
+Total before late penalty: [95/100]
 
 
-[/25] * Bully Algorithm 
-      Events            [ /5]
-      Responses         [ /5]
-      Timers/Timeouts   [ /5]
-      Structure, design, organization [/10]  
+[25/25] * Bully Algorithm 
+      Events            [5 /5]
+      Responses         [5 /5]
+      Timers/Timeouts   [5 /5]
+      Structure, design, organization [10/10]  
 
 
-[/15] * Vector Clock implementation 
-       Increments local clock at appropriate times [ /5]
-       Properly sends/receives and updates vector clocks [/5]
-       Structure, design, and organization of clock implementation [ /5]
+[15/15] * Vector Clock implementation 
+       Increments local clock at appropriate times [5 /5]
+       Properly sends/receives and updates vector clocks [5/5]
+       Structure, design, and organization of clock implementation [5 
+/5]
 
-[/10] * Interoperability 
-        Implementation 1   [ /4]
-        Implementation 2   [ /4]
-	Interoperability report [/2]
+[5/10] * Interoperability 
+        Implementation 1   [2 /4]
+        Implementation 2   [2 /4]
+	Interoperability report [1/2]
 
-[/10] * Event Logging for ShiViz 
+[10/10] * Event Logging for ShiViz 
       Log events - 2 each
 	Election
 	Coordinator
@@ -26,12 +27,12 @@ Total before late penalty: [/100]
 	Timeout events
 	Sending/Receiving Events
  
-[/15] ShiViz Example
-       Must involve at least 3 notes and show key events [/10]
+[15/15] ShiViz Example
+       Must involve at least 3 notes and show key events [10/10]
        ShiVizReport.txt file explaining example and its 
-       significance    [/5]
+       significance    [5/5]
  
-[/25] TA Interview
+[25/25] TA Interview
       Discussions and responses to the following areas:
       * Interoperability Experience
       * Usage of ShiViz - what did you use it for, what was your experience
