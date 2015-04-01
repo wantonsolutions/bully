@@ -1,4 +1,5 @@
 Total before late penalty: [95/100]
+    ***Total after 0.13% late penalty is 94.87
 
 
 [25/25] * Bully Algorithm 
@@ -43,4 +44,5 @@ Total before late penalty: [95/100]
         elections, failure scenarios etc.
       * The specified protocol packet had an election ID field, is it 
         required for proper operation?
+
 
